@@ -392,19 +392,43 @@ function handleAction(e){}
 function createAdminAccount(){return {error:'Las identidades administrativas están fijadas a HWANG HYUNJIN y HWANG YEJI.'}}
 function saveAvatar(file){const p=player();if(!p||!file)return;if(file.size>2*1024*1024){toast('FOTO DEMASIADO GRANDE · MAX 2 MB');return}const reader=new FileReader();reader.onload=()=>{p.avatar=reader.result;saveDB();render();toast('FOTO DE PERFIL ACTUALIZADA')};reader.readAsDataURL(file)}
 function removeAvatar(){const p=player();if(!p)return;p.avatar='';saveDB();render();toast('FOTO ELIMINADA')}
-function createAccount(name,pass){
-  const clean=name.trim(),key=adminAccountKey(clean),adminName=isAuthorizedAdminName(clean);
+async function createAccount(name,pass){
+  const clean=name.trim(),key=adminAccountKey(clean);
   if(!clean||!pass)return {error:'Username and password are required.'};
-  if(key==='hwang hyunjin'){
-    if(db.accounts[key])return {error:'USUARIO RESERVADO · SOLO ALTO MANDO. HWANG HYUNJIN IS ALREADY REGISTERED. USE INICIAR SESIÓN.'};
-    if(pass!=='mina2025.r')return {error:'USUARIO RESERVADO · SOLO ALTO MANDO. La identidad HWANG HYUNJIN requiere su contraseña administrativa asignada.'};
-  }
-  if(key==='hwang yeji'&&db.accounts[key])return {error:'HWANG YEJI IS ALREADY REGISTERED. USE INICIAR SESIÓN.'};
-  if(!adminName&&db.accounts[key])return {error:'USUARIO YA REGISTRADO.'};
-  const code=adminName?(key==='hwang hyunjin'?'NC-ADMIN-HYUNJIN':'NC-ADMIN-YEJI'):'NC-'+Math.random().toString(36).slice(2,8).toUpperCase();
-  db.accounts[key]={name:clean,passwordHash:hash(pass),code,faction:null,xp:0,credits:0,reputation:0,missionsCompleted:[],unlockedFiles:[],achievements:{},decisions:[],history:[],incidents:[],events:[],submissions:[],avatar:'',createdAt:Date.now(),factionRequest:null,isAdmin:adminName,adminSetup:adminName?{configuredAt:Date.now()}:null};saveDB();return {key,code}
+  if(isAuthorizedAdminName(clean))return {error:'USUARIO ADMINISTRATIVO RESERVADO · USA EL ACCESO ADMINISTRATIVO.'};
+  if(db.accounts[key])return {error:'USUARIO YA REGISTRADO.'};
+  try{
+    const r=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:clean,pass})});
+    const data=await r.json();
+    if(!r.ok)throw new Error(data.error||'No se pudo registrar la cuenta en el servidor.');
+    const sp=data.profile||{};
+    db.accounts[key]={name:sp.name||clean,passwordHash:hash(pass),code:sp.code||('NC-'+Math.random().toString(36).slice(2,8).toUpperCase()),faction:sp.faction||null,xp:Number(sp.xp)||0,credits:Number(sp.credits)||0,reputation:Number(sp.reputation)||0,missionsCompleted:[],unlockedFiles:[],achievements:{},decisions:[],history:[],incidents:[],events:[],submissions:[],avatar:'',createdAt:sp.createdAt||Date.now(),factionRequest:null,isAdmin:false,central:true};
+    saveDB();sessionStorage.setItem('PLAYER_TOKEN',data.token||'');return {key,code:db.accounts[key].code};
+  }catch(e){return {error:e.message||'No se pudo registrar la cuenta.'}}
 }
-function login(name,pass){const key=adminAccountKey(name),p=db.accounts[key];if(!p||p.passwordHash!==hash(pass))return false;current=key;sessionStorage.setItem(SESSION,key);adminAuthed=!!isAdminAccount(p);adminIdentity=isAdminAccount(p)?p.name:'';return true}
+async function login(name,pass){
+  const key=adminAccountKey(name),local=db.accounts[key];
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,pass})});
+    const data=await r.json();
+    if(r.ok){
+      const sp=data.profile||{},p=local||{name:sp.name,passwordHash:hash(pass),code:sp.code};
+      p.name=sp.name;p.code=sp.code;p.faction=sp.faction||null;p.xp=Number(sp.xp)||0;p.credits=Number(sp.credits)||0;p.reputation=Number(sp.reputation)||0;p.suspended=!!sp.suspended;p.isAdmin=false;p.central=true;p.passwordHash=hash(pass);
+      db.accounts[key]=p;saveDB();sessionStorage.setItem('PLAYER_TOKEN',data.token||'');current=key;sessionStorage.setItem(SESSION,key);adminAuthed=false;adminIdentity='';return true;
+    }
+    if(local?.central)return false;
+  }catch(e){if(local?.central)return false}
+  if(!local||local.passwordHash!==hash(pass))return false;
+  try{
+    const r=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:local.name,pass})});
+    const data=await r.json();
+    if(r.ok){
+      local.code=data.profile?.code||local.code;local.central=true;sessionStorage.setItem('PLAYER_TOKEN',data.token||'');saveDB();
+      current=key;sessionStorage.setItem(SESSION,key);adminAuthed=false;adminIdentity='';return true;
+    }
+  }catch(e){}
+  current=key;sessionStorage.setItem(SESSION,key);adminAuthed=false;adminIdentity='';return true;
+}
 function logout(){sessionStorage.removeItem(SESSION);current=null;adminAuthed=false;document.getElementById('game').style.display='none';document.getElementById('auth').classList.remove('hidden');document.getElementById('cover').style.display='none';renderAuth('login')}
 function renderAuth(mode){document.getElementById('authMsg').innerHTML='';document.getElementById('loginForm').classList.toggle('hidden',mode!=='login');document.getElementById('registerForm').classList.toggle('hidden',mode!=='register');document.getElementById('tabLogin').classList.toggle('active',mode==='login');document.getElementById('tabRegister').classList.toggle('active',mode==='register');if(mode==='admin'){document.getElementById('loginForm').classList.add('hidden');document.getElementById('registerForm').classList.add('hidden');document.getElementById('authMsg').innerHTML='<div class="panel"><div class="stamp">RESTRINGIDO</div><h2>ACCESO ADMINISTRATIVO</h2><div class="field"><label>USUARIO ADMINISTRATIVO (OPCIONAL)</label><input id="directAdminUser" autocomplete="username"><label>CONTRASEÑA ADMINISTRATIVA</label><input id="directAdminPass" type="password" autocomplete="off"></div><button class="btn primary block" style="margin-top:10px" onclick="directAdminLogin()">ENTRAR A LA SALA DE CONTROL</button><div id="directAdminError"></div><p class="small muted" style="margin-top:12px">Acceso protegido por autenticación del servidor.</p></div>'}}
 async function directAdminLogin(){
@@ -422,8 +446,8 @@ async function directAdminLogin(){
 }
 function openAuth(){document.getElementById('cover').style.display='none';document.getElementById('auth').classList.remove('hidden');renderAuth('login')}
 document.getElementById('accessBtn').onclick=openAuth;document.getElementById('adminEntry').onclick=()=>{document.getElementById('cover').style.display='none';document.getElementById('auth').classList.remove('hidden');renderAuth('admin')};document.getElementById('backCover').onclick=()=>{document.getElementById('auth').classList.add('hidden');document.getElementById('cover').style.display='grid'};document.getElementById('tabLogin').onclick=()=>renderAuth('login');document.getElementById('tabRegister').onclick=()=>renderAuth('register');document.getElementById('hamb').onclick=()=>document.getElementById('layout').classList.toggle('sidebarOpen');document.getElementById('logoutBtn').onclick=logout;document.getElementById('modalClose').onclick=closeModal;document.getElementById('modal').onclick=e=>{if(e.target.id==='modal')closeModal()};document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
-document.getElementById('loginForm').onsubmit=e=>{e.preventDefault();const ok=login(document.getElementById('loginName').value,document.getElementById('loginPass').value);if(!ok){document.getElementById('authMsg').innerHTML='<div class="error">Contraseña incorrecta o identidad no encontrada.</div>';return}enterGame()};
-document.getElementById('registerForm').onsubmit=e=>{e.preventDefault();const n=document.getElementById('regName').value.trim(),a=document.getElementById('regPass').value,b=document.getElementById('regPass2').value;if(!n||!a||!b){document.getElementById('authMsg').innerHTML='<div class="error">Nombre y contraseña son obligatorios.</div>';return}if(a!==b){document.getElementById('authMsg').innerHTML='<div class="error">Las contraseñas no coinciden.</div>';return}const r=createAccount(n,a);if(r.error){document.getElementById('authMsg').innerHTML='<div class="error">'+r.error+'</div>';return}login(n,a);enterGame(true)};
+document.getElementById('loginForm').onsubmit=async e=>{e.preventDefault();const ok=await login(document.getElementById('loginName').value,document.getElementById('loginPass').value);if(!ok){document.getElementById('authMsg').innerHTML='<div class="error">Cuenta no encontrada, contraseña incorrecta o cuenta suspendida/eliminada por el administrador.</div>';return}enterGame()};
+document.getElementById('registerForm').onsubmit=async e=>{e.preventDefault();const n=document.getElementById('regName').value.trim(),a=document.getElementById('regPass').value,b=document.getElementById('regPass2').value;if(!n||!a||!b){document.getElementById('authMsg').innerHTML='<div class="error">Nombre y contraseña son obligatorios.</div>';return}if(a!==b){document.getElementById('authMsg').innerHTML='<div class="error">Las contraseñas no coinciden.</div>';return}const r=await createAccount(n,a);if(r.error){document.getElementById('authMsg').innerHTML='<div class="error">'+esc(r.error)+'</div>';return}await login(n,a);enterGame(true)};
 function enterGame(isNew=false){document.getElementById('cover').style.display='none';document.getElementById('auth').classList.add('hidden');document.getElementById('game').style.display='block';currentView=isNew?'choose':'dossier';if(isNew){setTimeout(()=>{modal(`<div class="eyebrow">VERIFICACIÓN DE IDENTIDAD</div><h1>IDENTIDAD CREADA</h1><p>Tu código único de jugador es:</p><div class="codeDisplay">${player().code}</div><p class="muted">Guárdalo. Se conservará aunque cierres sesión.</p><button class="btn primary block" onclick="closeModal();chooseFaction()">CONTINUAR AL EXPEDIENTE PRINCIPAL</button>`)},100)}render()}
 
 /* ================= NOIR CITY · SPANISH / ROLEPLAY UPGRADE ================= */
