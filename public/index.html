@@ -292,7 +292,7 @@ let populationTimer=null;
 async function adminPopulation(){
   if(!adminAuthed)return;
   try{
-    const r=await fetch('/api/population',{cache:'no-store'}); const p=await r.json();
+    const token=sessionStorage.getItem('ADMIN_TOKEN')||''; const r=await fetch('/api/population',{headers:{Authorization:'Bearer '+token},cache:'no-store'}); const p=await r.json();
     const faction=(name,total,online)=>'<div class="adminItem"><div class="eyebrow">'+name+'</div><strong style="font-size:30px">'+total+'</strong><div class="small muted">registrados</div><div style="margin-top:8px"><span class="badge good">'+online+' EN LÍNEA AHORA</span></div></div>';
     const onlineRows=(p.onlinePlayers||[]).sort((a,b)=>String(a.faction).localeCompare(String(b.faction))||String(a.name).localeCompare(String(b.name))).map(x=>'<tr><td>'+esc(x.name)+'</td><td class="mono">'+esc(x.code)+'</td><td>'+esc(x.faction)+'</td><td>'+new Date(x.lastSeen).toLocaleTimeString('es-EC')+'</td></tr>').join('');
     modal('<div class="eyebrow">ALTO MANDO / POBLACIÓN</div><h1>CONTROL DE JUGADORES</h1><p class="muted">Datos recibidos del servidor. <b>EN LÍNEA</b> significa actividad detectada recientemente.</p><div class="adminStats">'+
