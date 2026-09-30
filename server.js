@@ -46,8 +46,40 @@ async function route(req,res){
   if(req.method==='GET'&&u.pathname==='/api/me'){if(!a)return send(res,401,{error:'Sesión expirada'});return send(res,200,{profile:clean(a.player),state:publicState()})}
   if(req.method==='POST'&&u.pathname==='/api/logout'){const h=req.headers.authorization||'';if(h.startsWith('Bearer '))sessions.delete(h.slice(7));return send(res,200,{ok:true})}
   if(req.method==='POST'&&u.pathname==='/api/player/sync'){if(!a)return send(res,401,{error:'Sesión expirada'});const x=await body(req),q=x.profile||{},p=a.player;for(const k of ['name','code','faction','xp','credits','reputation','missionsCompleted','unlockedFiles','achievements','decisions','history','incidents','events','submissions','createdAt','avatar'])if(k in q)p[k]=q[k];p.xp=Math.max(0,Number(p.xp)||0);p.credits=Math.max(0,Number(p.credits)||0);p.reputation=Math.max(0,Number(p.reputation)||0);save();return send(res,200,{ok:true,profile:clean(p),state:publicState()})}
-  if(req.method==='GET'&&u.pathname==='/api/admin/players'){if(!requireAdmin(req))return send(res,403,{error:'Acceso denegado'});return send(res,200,{players:Object.values(db.players).map(clean),state:publicState()})}
-  if(req.method==='POST'&&u.pathname==='/api/admin/player'){if(!requireAdmin(req))return send(res,403,{error:'Acceso denegado'});const x=await body(req),key=norm(x.name),p=db.players[key];if(!p)return send(res,404,{error:'Jugador no encontrado'});for(const k of ['xp','credits','reputation','faction','suspended'])if(k in x)p[k]=x[k];save();return send(res,200,{profile:clean(p)})}
+  if(req.method==='GET'&&u.pathname==='/api/admin/players'){
+    if(!requireAdmin(req))return send(res,403,{error:'Acceso denegado'});
+    const real=Object.values(db.players).map(p=>({...clean(p),source:'ACCOUNT'}));
+    const seen=new Set(real.map(p=>norm(p.code)));
+    const known=Object.values(db.knownPlayers).filter(p=>!seen.has(norm(p.code))).map(p=>({...p,source:'PRESENCE'}));
+    return send(res,200,{players:[...real,...known],state:publicState(),population:population()});
+  }
+  if(req.method==='POST'&&u.pathname==='/api/admin/player'){
+    if(!requireAdmin(req))return send(res,403,{error:'Acceso denegado'});
+    const x=await body(req),code=String(x.code||'').trim(),key=x.name?norm(x.name):'',p=Object.values(db.players).find(v=>norm(v.code)===norm(code))||db.players[key];
+    if(!p)return send(res,404,{error:'Jugador no encontrado'});
+    if(isAdminName(p.name))return send(res,403,{error:'No se puede modificar una identidad administrativa'});
+    for(const k of ['xp','credits','reputation','faction','suspended'])if(k in x)p[k]=k==='suspended'?!!x[k]:x[k];
+    const pk=norm(p.code); if(db.knownPlayers[pk]){db.knownPlayers[pk]={...db.knownPlayers[pk],name:p.name,code:p.code,faction:p.faction,suspended:p.suspended,updatedAt:Date.now()}}
+    save();return send(res,200,{profile:clean(p),population:population()});
+  }
+  if(req.method==='DELETE'&&u.pathname==='/api/admin/player'){
+    if(!requireAdmin(req))return send(res,403,{error:'Acceso denegado'});
+    const code=String(u.searchParams.get('code')||'').trim();
+    const key=String(u.searchParams.get('name')||'').trim();
+    const entry=Object.entries(db.players).find(([k,p])=>code?norm(p.code)===norm(code):k===norm(key));
+    if(entry){
+      const [playerKey,p]=entry;
+      if(isAdminName(p.name))return send(res,403,{error:'No se puede eliminar una identidad administrativa'});
+      delete db.players[playerKey];
+      delete db.knownPlayers[norm(p.code)];
+      for(const [t,ss] of sessions)if(ss.id===playerKey)sessions.delete(t);
+      presence.delete(norm(p.code));
+      save();return send(res,200,{ok:true,deleted:p.name,population:population()});
+    }
+    const kp=Object.values(db.knownPlayers).find(p=>code?norm(p.code)===norm(code):norm(p.name)===norm(key));
+    if(!kp)return send(res,404,{error:'Jugador no encontrado'});
+    delete db.knownPlayers[norm(kp.code)];presence.delete(norm(kp.code));save();return send(res,200,{ok:true,deleted:kp.name,population:population()});
+  }
   if(req.method==='POST'&&u.pathname==='/api/admin/territory'){if(!requireAdmin(req))return send(res,403,{error:'Acceso denegado'});const x=await body(req),zone=String(x.zone||''),delta=Number(x.delta)||0;if(!db.territories[zone])return send(res,400,{error:'Territorio inválido'});db.territories[zone].control=Math.max(0,Math.min(100,Number(db.territories[zone].control)+delta));save();return send(res,200,publicState())}
   return send(res,404,{error:'Ruta no encontrada'})
  }catch(e){console.error(e);return send(res,500,{error:'Error interno del servidor'})}
